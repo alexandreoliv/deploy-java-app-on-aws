@@ -29,12 +29,6 @@ jobs:
     - name: Copy artifact to staging directory
       run: mkdir staging && cp target/*.jar staging
 
-    # - name: SonarQube Scan
-    #   uses: sonarsource/sonarqube-scan-action@v2.2.0
-    #   env:
-    #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-    #     SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
     - name: Publish Artifacts    
       uses: actions/upload-artifact@v4
       with:
@@ -43,13 +37,12 @@ jobs:
         
     - name: List files in staging directory
       run: ls -al staging
-      
+
   deploy:
     runs-on: ubuntu-24.04
     needs: build
 
     steps:
-
     - name: List available artifacts
       run: |
         echo "Listing artifacts available in the current workflow"
@@ -101,7 +94,7 @@ jobs:
           cd /home/ubuntu/app
           # Check if Java is already installed, if not, install it
           java -version || sudo apt update && sudo apt install -y openjdk-17-jdk
-          # Run the Java application (adjust the command as needed)
-          nohup java -jar $artifact_name &
+          # Run the Java application
+          nohup java -jar $artifact_name > /home/ubuntu/app/app.log 2>&1 &
           echo "Application started."
         EOF
