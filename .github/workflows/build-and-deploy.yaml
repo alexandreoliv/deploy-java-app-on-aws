@@ -1,0 +1,107 @@
+name: Build and Deploy Java App to EC2
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout external repository
+      uses: actions/checkout@v4
+      with:
+        repository: 'ironhack-labs/maven-java-sample' # External repository
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+    
+    - name: Build with Maven
+      run: mvn -B package --file pom.xml
+
+    - name: Copy artifact to staging directory
+      run: mkdir staging && cp target/*.jar staging
+
+    # - name: SonarQube Scan
+    #   uses: sonarsource/sonarqube-scan-action@v2.2.0
+    #   env:
+    #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    #     SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+    - name: Publish Artifacts    
+      uses: actions/upload-artifact@v4
+      with:
+        name: Package
+        path: staging/*
+        
+    - name: List files in staging directory
+      run: ls -al staging
+      
+  deploy:
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+
+    - name: List available artifacts
+      run: |
+        echo "Listing artifacts available in the current workflow"
+        curl -s https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/staging | jq .
+
+    - name: Download Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: Package
+
+    - name: Verify Downloaded Artifact
+      run: |
+        echo "Listing files after artifact download"
+        ls -al
+
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Set up SSH private key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/my-key.pem
+        chmod 400 ~/.ssh/my-key.pem  # Set appropriate permissions for the private key
+
+    - name: Ensure target directory exists on EC2
+      run: |
+        ssh -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ubuntu@${{ secrets.EC2_IP }} << 'EOF'
+          # Ensure /home/ubuntu/app directory exists
+          sudo mkdir -p /home/ubuntu/app
+          sudo chown ubuntu:ubuntu /home/ubuntu/app  # Give ownership to the ubuntu user
+          # Ensure it has the correct permissions
+          sudo chmod 755 /home/ubuntu/app
+        EOF
+
+    - name: Deploy code to EC2
+      run: |
+        # List the downloaded files and capture the name of the artifact
+        artifact_name=$(ls | grep .jar)
+    
+        # Copy the artifact to EC2 instance using scp with the private key
+        scp -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem $artifact_name ubuntu@${{ secrets.EC2_IP }}:/home/ubuntu/app
+    
+        # SSH into the EC2 instance to install dependencies and start the Java app
+        ssh -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ubuntu@${{ secrets.EC2_IP }} << EOF
+          cd /home/ubuntu/app
+          # Check if Java is already installed, if not, install it
+          java -version || sudo apt update && sudo apt install -y openjdk-17-jdk
+          # Run the Java application (adjust the command as needed)
+          nohup java -jar $artifact_name &
+          echo "Application started."
+        EOF
